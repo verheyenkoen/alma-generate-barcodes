@@ -81,10 +81,6 @@ async function selectSet(): Promise<AlmaSet> {
   let sets: AlmaSet[];
   try {
     sets = await alma.listItemSets();
-    // The list response omits member counts; fetch full details to show them.
-    sets = await enrichWithDetails(sets, (done) =>
-      sp.message(`Fetching set details… ${done}/${sets.length}`),
-    );
     sp.stop(`Loaded ${sets.length} set(s) of physical items`);
   } catch (e) {
     sp.stop("Failed to fetch sets");
@@ -99,15 +95,20 @@ async function selectSet(): Promise<AlmaSet> {
 
   sets.sort(byNewestFirst);
 
+  const options = sets.map((s) => ({
+    value: s.id,
+    label: setLabel(s),
+    hint: s.description || undefined,
+  }));
+  const optionById = new Map(options.map((o) => [o.value, o]));
+  const stopFillingCounts = fillInMemberCounts(sets, optionById);
+
   const selected = await p.select({
     message: "Select a set",
     maxItems: 12,
-    options: sets.map((s) => ({
-      value: s.id,
-      label: `${s.name} (${setKindLabel(s)}${memberCountLabel(s)})`,
-      hint: s.description || undefined,
-    })),
+    options,
   });
+  stopFillingCounts();
   if (p.isCancel(selected)) {
     p.cancel("Cancelled");
     process.exit(0);
@@ -115,21 +116,42 @@ async function selectSet(): Promise<AlmaSet> {
   return sets.find((s) => s.id === selected)!;
 }
 
-async function enrichWithDetails(
+/**
+ * The set list response omits member counts, so fetch each set's details in
+ * the background while the select prompt is already open, patching the option
+ * labels as counts come in. Clack repaints on terminal resize; faking a
+ * resize event makes the updated labels visible without user input.
+ */
+function fillInMemberCounts(
   sets: AlmaSet[],
-  onProgress: (done: number) => void,
-): Promise<AlmaSet[]> {
-  const detailed: AlmaSet[] = [];
-  for (let i = 0; i < sets.length; i += ITEM_FETCH_CONCURRENCY) {
-    const batch = sets.slice(i, i + ITEM_FETCH_CONCURRENCY);
-    const results = await Promise.all(
-      // Fall back to the brief version if details cannot be fetched.
-      batch.map((s) => alma.getSet(s.id).catch(() => s)),
-    );
-    detailed.push(...results);
-    onProgress(detailed.length);
-  }
-  return detailed;
+  optionById: Map<string, { label: string }>,
+): () => void {
+  let active = true;
+  void (async () => {
+    for (let i = 0; i < sets.length && active; i += ITEM_FETCH_CONCURRENCY) {
+      const batch = sets.slice(i, i + ITEM_FETCH_CONCURRENCY);
+      await Promise.all(
+        batch.map(async (s) => {
+          try {
+            const detailed = await alma.getSet(s.id);
+            s.number_of_members = detailed.number_of_members;
+            const option = optionById.get(s.id);
+            if (option) option.label = setLabel(s);
+          } catch {
+            // Leave the label without a count.
+          }
+        }),
+      );
+      if (active) process.stdout.emit("resize");
+    }
+  })();
+  return () => {
+    active = false;
+  };
+}
+
+function setLabel(s: AlmaSet): string {
+  return `${s.name} (${setKindLabel(s)}${memberCountLabel(s)})`;
 }
 
 function byNewestFirst(a: AlmaSet, b: AlmaSet): number {
