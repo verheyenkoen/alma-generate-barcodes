@@ -380,6 +380,12 @@ async function applyChange(
     barcode = change.fixed;
     generated = false;
   } else {
+    if (change.fixed) {
+      p.log.warn(
+        `${change.fixed} is already taken by another item in this run, ` +
+          `falling back to a generated barcode for ${itemLabel(change.item)}`,
+      );
+    }
     barcode = await counter.next(used);
     generated = true;
   }
@@ -398,6 +404,10 @@ async function applyChange(
       if (duplicateFailures >= MAX_DUPLICATE_RETRIES) {
         throw new DuplicateRetriesExhausted(barcode);
       }
+      p.log.warn(
+        `${barcode} is not unique for ${itemLabel(change.item)}, ` +
+          `retrying with a generated barcode (attempt ${duplicateFailures + 1}/${MAX_DUPLICATE_RETRIES})`,
+      );
       // A repaired barcode that collides falls back to a generated one.
       barcode = await counter.next(used);
       generated = true;
