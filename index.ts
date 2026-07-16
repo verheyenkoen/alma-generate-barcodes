@@ -309,7 +309,10 @@ function changeAction(c: PlannedChange): string {
 }
 
 function itemLabel(item: AlmaItem): string {
-  return item.bib_data.title ?? `pid ${item.item_data.pid}`;
+  const { pid, description } = item.item_data;
+  return [item.bib_data.title, description, `pid ${pid}`]
+    .filter(Boolean)
+    .join(" | ");
 }
 
 async function applyChanges(

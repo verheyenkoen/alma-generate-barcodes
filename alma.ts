@@ -17,7 +17,7 @@ export type SetMember = {
 export type AlmaItem = {
   bib_data: { mms_id: string; title?: string };
   holding_data: { holding_id: string };
-  item_data: { pid: string; barcode?: string };
+  item_data: { pid: string; barcode?: string; description?: string };
   [key: string]: unknown;
 };
 
