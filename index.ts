@@ -11,7 +11,6 @@ import {
   incrementBarcode,
   isValidGeneratorSeed,
 } from "./barcode.ts";
-import { typeaheadSelect } from "./typeahead-select.ts";
 
 const LAST_BARCODE_FILE = `${import.meta.dir}/.last-barcode`;
 const MAX_DUPLICATE_RETRIES = 5;
@@ -104,7 +103,7 @@ async function selectSet(): Promise<AlmaSet> {
   const optionById = new Map(options.map((o) => [o.value, o]));
   const stopFillingCounts = fillInMemberCounts(sets, optionById);
 
-  const selected = await typeaheadSelect({
+  const selected = await p.select({
     message: "Select a set",
     maxItems: 12,
     options,
