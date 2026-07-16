@@ -303,8 +303,17 @@ function changeAction(c: PlannedChange): string {
       : "empty -> new barcode";
   }
   const digits = c.oldBarcode.replace(/\D+/g, "");
-  if (digits.length > 12) return "long barcode -> truncated";
-  if (digits.length < 12) return "short barcode -> padded";
+  const hasText = digits.length !== c.oldBarcode.length;
+  if (digits.length > 12) {
+    return hasText
+      ? "long barcode with text -> stripped and truncated"
+      : "long barcode -> truncated";
+  }
+  if (digits.length < 12) {
+    return hasText
+      ? "short barcode with text -> stripped and padded"
+      : "short barcode -> padded";
+  }
   return "barcode with text -> digits only";
 }
 

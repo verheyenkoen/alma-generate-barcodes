@@ -13,25 +13,32 @@ test("empty or missing barcodes need generation", () => {
   expect(classifyBarcode(null)).toEqual({ kind: "empty" });
 });
 
-test("too short barcodes are padded with 1 and zeroes", () => {
+test("too short barcodes are padded with 72 and zeroes", () => {
   expect(classifyBarcode("12345678")).toEqual({
     kind: "fixable",
-    fixed: "100012345678",
+    fixed: "720012345678",
   });
   expect(classifyBarcode("5")).toEqual({
     kind: "fixable",
-    fixed: "100000000005",
+    fixed: "720000000005",
   });
+  expect(classifyBarcode("1234567890")).toEqual({
+    kind: "fixable",
+    fixed: "721234567890",
+  });
+});
+
+test("11-digit barcodes are trimmed to 10 and prefixed with 72", () => {
   expect(classifyBarcode("12345678901")).toEqual({
     kind: "fixable",
-    fixed: "112345678901",
+    fixed: "722345678901",
   });
 });
 
 test("text is stripped, then padded if needed", () => {
   expect(classifyBarcode("ABC12345678")).toEqual({
     kind: "fixable",
-    fixed: "100012345678",
+    fixed: "720012345678",
   });
   expect(classifyBarcode("X123456789012")).toEqual({
     kind: "fixable",
@@ -39,10 +46,10 @@ test("text is stripped, then padded if needed", () => {
   });
 });
 
-test("too long barcodes keep the rightmost 12 digits", () => {
+test("too long barcodes keep the rightmost 10 digits, prefixed with 72", () => {
   expect(classifyBarcode("9876123456789012")).toEqual({
     kind: "fixable",
-    fixed: "123456789012",
+    fixed: "723456789012",
   });
 });
 

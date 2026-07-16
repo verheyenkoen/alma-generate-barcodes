@@ -7,7 +7,7 @@ Interactive CLI that fills in missing (and optionally repairs invalid) item barc
 1. Lists all sets of physical items (itemized and logical) and lets you pick one.
 2. Lets you pick a strategy:
    - **Generate empty barcodes only** - items with an invalid barcode are left untouched.
-   - **Generate empty and fix invalid barcodes** - also repairs invalid barcodes (strip non-digits, pad short ones, truncate long ones).
+   - **Generate empty and fix invalid barcodes** - also repairs invalid barcodes (strip non-digits, pad short ones with `72` and zeroes, truncate long ones to the rightmost 10 digits prefixed with `72`).
 3. Fetches all items in the set, classifies their barcodes and shows a preview of the planned changes.
 4. After confirmation, updates the items in Alma one by one.
 
