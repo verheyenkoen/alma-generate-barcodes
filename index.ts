@@ -285,17 +285,27 @@ function planChanges(
 }
 
 function previewChanges(changes: PlannedChange[]) {
-  const MAX_PREVIEW = 15;
-  const lines = changes
-    .slice(0, MAX_PREVIEW)
-    .map(
-      (c) =>
-        `${c.oldBarcode || "(empty)"} -> ${c.fixed ?? "(new barcode)"}  ${itemLabel(c.item)}`,
-    );
-  if (changes.length > MAX_PREVIEW) {
-    lines.push(`… and ${changes.length - MAX_PREVIEW} more`);
+  const counts = new Map<string, number>();
+  for (const change of changes) {
+    const action = changeAction(change);
+    counts.set(action, (counts.get(action) ?? 0) + 1);
   }
+  const lines = [...counts].map(
+    ([action, count]) => `${action}: ${count} item${count === 1 ? "" : "s"}`,
+  );
   p.note(lines.join("\n"), "Planned changes");
+}
+
+function changeAction(c: PlannedChange): string {
+  if (!c.fixed) {
+    return c.oldBarcode
+      ? "unfixable barcode -> new barcode"
+      : "empty -> new barcode";
+  }
+  const digits = c.oldBarcode.replace(/\D+/g, "");
+  if (digits.length > 12) return "long barcode -> truncated";
+  if (digits.length < 12) return "short barcode -> padded";
+  return "barcode with text -> digits only";
 }
 
 function itemLabel(item: AlmaItem): string {
