@@ -5,6 +5,7 @@ import {
   isDuplicateBarcodeError,
   type AlmaItem,
   type AlmaSet,
+  type SetMember,
 } from "./alma.ts";
 import {
   classifyBarcode,
@@ -14,12 +15,18 @@ import {
 
 const LAST_BARCODE_FILE = `${import.meta.dir}/.last-barcode`;
 const MAX_DUPLICATE_RETRIES = 5;
-const ITEM_FETCH_CONCURRENCY = 8;
+const SET_DETAILS_CONCURRENCY = 8;
 
 type Strategy = "generate" | "fix";
 
+/**
+ * A set member that can be addressed as an item. Its description is the
+ * barcode; items without a barcode have no description at all.
+ */
+type ItemMember = SetMember & { link: string };
+
 type PlannedChange = {
-  item: AlmaItem;
+  member: ItemMember;
   oldBarcode: string;
   /** Repaired barcode; absent means a fresh barcode must be generated. */
   fixed?: string;
@@ -40,13 +47,13 @@ async function main() {
 
   const set = await selectSet();
   const strategy = await selectStrategy();
-  const items = await fetchItems(set);
+  const members = await fetchMembers(set);
 
-  const { changes, valid, skippedInvalid } = planChanges(items, strategy);
+  const { changes, valid, skippedInvalid } = planChanges(members, strategy);
 
   p.log.info(
     [
-      `${items.length} item(s) checked: ${valid} valid`,
+      `${members.length} item(s) checked: ${valid} valid`,
       `${changes.length} to update`,
       skippedInvalid > 0
         ? `${skippedInvalid} invalid but skipped (strategy: generate only)`
@@ -71,7 +78,7 @@ async function main() {
     process.exit(0);
   }
 
-  const { ok, failed } = await applyChanges(changes, items);
+  const { ok, failed } = await applyChanges(changes, members);
   p.outro(`Done. ${ok} updated, ${failed} failed.`);
 }
 
@@ -128,8 +135,8 @@ function fillInMemberCounts(
 ): () => void {
   let active = true;
   void (async () => {
-    for (let i = 0; i < sets.length && active; i += ITEM_FETCH_CONCURRENCY) {
-      const batch = sets.slice(i, i + ITEM_FETCH_CONCURRENCY);
+    for (let i = 0; i < sets.length && active; i += SET_DETAILS_CONCURRENCY) {
+      const batch = sets.slice(i, i + SET_DETAILS_CONCURRENCY);
       await Promise.all(
         batch.map(async (s) => {
           try {
@@ -200,81 +207,64 @@ async function selectStrategy(): Promise<Strategy> {
   return strategy;
 }
 
-async function fetchItems(set: AlmaSet): Promise<AlmaItem[]> {
+/**
+ * Set members carry the item barcode in their description, which is all that
+ * is needed for planning. Full items are only fetched for the ones to update.
+ */
+async function fetchMembers(set: AlmaSet): Promise<ItemMember[]> {
   const sp = p.spinner();
   sp.start("Fetching set members…");
   try {
-    const members = await alma.listSetMembers(set.id, (fetched, total) =>
+    const all = await alma.listSetMembers(set.id, (fetched, total) =>
       sp.message(`Fetching set members… ${fetched}/${total}`),
     );
-    const links = members
-      .map((m) => m.link)
-      .filter((l): l is string => Boolean(l));
-
-    const items: AlmaItem[] = [];
-    let fetchErrors = 0;
-    for (let i = 0; i < links.length; i += ITEM_FETCH_CONCURRENCY) {
-      const batch = links.slice(i, i + ITEM_FETCH_CONCURRENCY);
-      const results = await Promise.all(
-        batch.map(async (link) => {
-          try {
-            return await alma.getItem(link);
-          } catch {
-            fetchErrors++;
-            return null;
-          }
-        }),
-      );
-      items.push(...results.filter((r): r is AlmaItem => r !== null));
-      sp.message(
-        `Fetching items… ${Math.min(i + batch.length, links.length)}/${links.length}`,
-      );
-    }
+    const members = all.filter((m): m is ItemMember => Boolean(m.link));
+    const skipped = all.length - members.length;
 
     sp.stop(
-      `Loaded ${items.length} item(s)` +
-        (fetchErrors > 0 ? ` (${fetchErrors} failed to fetch)` : ""),
+      `Loaded ${members.length} item(s)` +
+        (skipped > 0 ? ` (${skipped} without item link skipped)` : ""),
     );
-    if (items.length === 0) {
-      p.cancel("The set contains no fetchable items.");
+    if (members.length === 0) {
+      p.cancel("The set contains no items.");
       process.exit(1);
     }
-    return items;
+    return members;
   } catch (e) {
-    sp.stop("Failed to fetch items");
+    sp.stop("Failed to fetch set members");
     p.cancel((e as Error).message);
     process.exit(1);
   }
 }
 
 function planChanges(
-  items: AlmaItem[],
+  members: ItemMember[],
   strategy: Strategy,
 ): { changes: PlannedChange[]; valid: number; skippedInvalid: number } {
   const changes: PlannedChange[] = [];
   let valid = 0;
   let skippedInvalid = 0;
 
-  for (const item of items) {
-    const oldBarcode = (item.item_data.barcode ?? "").trim();
+  for (const member of members) {
+    const oldBarcode = (member.description ?? "").trim();
     const classification = classifyBarcode(oldBarcode);
     switch (classification.kind) {
       case "valid":
         valid++;
         break;
       case "empty":
-        changes.push({ item, oldBarcode });
+        changes.push({ member, oldBarcode });
         break;
       case "fixable":
         if (strategy === "fix") {
-          changes.push({ item, oldBarcode, fixed: classification.fixed });
+          changes.push({ member, oldBarcode, fixed: classification.fixed });
         } else {
           skippedInvalid++;
         }
         break;
       case "unfixable":
         if (strategy === "fix") {
-          changes.push({ item, oldBarcode });
+          changes.push({ member, oldBarcode });
         } else {
           skippedInvalid++;
         }
@@ -326,12 +316,12 @@ function itemLabel(item: AlmaItem): string {
 
 async function applyChanges(
   changes: PlannedChange[],
-  allItems: AlmaItem[],
+  allMembers: ItemMember[],
 ): Promise<{ ok: number; failed: number }> {
   // Barcodes already present in the set; used to avoid in-run collisions.
   const used = new Set<string>();
-  for (const item of allItems) {
-    const b = (item.item_data.barcode ?? "").trim();
+  for (const member of allMembers) {
+    const b = (member.description ?? "").trim();
     if (b) used.add(b);
   }
 
@@ -340,22 +330,32 @@ async function applyChanges(
   let failed = 0;
 
   for (const change of changes) {
+    let label = `pid ${change.member.id}`;
     try {
-      const newBarcode = await applyChange(change, counter, used);
+      // The PUT needs the full item, so fetch it just before updating.
+      const item = await alma.getItem(change.member.link);
+      label = itemLabel(item);
+      const current = (item.item_data.barcode ?? "").trim();
+      if (current !== change.oldBarcode) {
+        throw new Error(
+          `barcode changed to "${current}" since the set was read, skipped`,
+        );
+      }
+      const newBarcode = await applyChange(item, change, counter, used);
       p.log.success(
-        `${change.oldBarcode || "(empty)"} -> ${newBarcode}  ${itemLabel(change.item)}`,
+        `${change.oldBarcode || "(empty)"} -> ${newBarcode}  ${label}`,
       );
       ok++;
     } catch (e) {
       if (e instanceof DuplicateRetriesExhausted) {
         p.cancel(
-          `Gave up on ${itemLabel(change.item)}: ${MAX_DUPLICATE_RETRIES} generated barcodes were ` +
+          `Gave up on ${label}: ${MAX_DUPLICATE_RETRIES} generated barcodes were ` +
             `already taken (last tried: ${e.lastTried}). Update ${LAST_BARCODE_FILE} manually and rerun.`,
         );
         process.exit(1);
       }
       p.log.error(
-        `${change.oldBarcode || "(empty)"}  ${itemLabel(change.item)} - ${(e as Error).message}`,
+        `${change.oldBarcode || "(empty)"}  ${label} - ${(e as Error).message}`,
       );
       failed++;
     }
@@ -370,6 +370,7 @@ class DuplicateRetriesExhausted extends Error {
 }
 
 async function applyChange(
+  item: AlmaItem,
   change: PlannedChange,
   counter: BarcodeCounter,
   used: Set<string>,
@@ -383,7 +384,7 @@ async function applyChange(
     if (change.fixed) {
       p.log.warn(
         `${change.fixed} is already taken by another item in this run, ` +
-          `falling back to a generated barcode for ${itemLabel(change.item)}`,
+          `falling back to a generated barcode for ${itemLabel(item)}`,
       );
     }
     barcode = await counter.next(used);
@@ -393,7 +394,7 @@ async function applyChange(
   let duplicateFailures = 0;
   while (true) {
     try {
-      await alma.updateItemBarcode(change.item, barcode);
+      await alma.updateItemBarcode(item, barcode);
       used.add(barcode);
       if (generated) await counter.persist();
       return barcode;
@@ -405,7 +406,7 @@ async function applyChange(
         throw new DuplicateRetriesExhausted(barcode);
       }
       p.log.warn(
-        `${barcode} is not unique for ${itemLabel(change.item)}, ` +
+        `${barcode} is not unique for ${itemLabel(item)}, ` +
           `retrying with a generated barcode (attempt ${duplicateFailures + 1}/${MAX_DUPLICATE_RETRIES})`,
       );
       // A repaired barcode that collides falls back to a generated one.

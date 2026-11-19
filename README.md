@@ -8,8 +8,8 @@ Interactive CLI that fills in missing (and optionally repairs invalid) item barc
 2. Lets you pick a strategy:
    - **Generate empty barcodes only** - items with an invalid barcode are left untouched.
    - **Generate empty and fix invalid barcodes** - also repairs invalid barcodes (strip non-digits, pad short ones with `72` and zeroes, truncate long ones to the rightmost 10 digits prefixed with `72`).
-3. Fetches all items in the set, classifies their barcodes and shows a preview of the planned changes.
-4. After confirmation, updates the items in Alma one by one.
+3. Reads the barcodes from the set member list (no per-item calls), classifies them and shows a preview of the planned changes.
+4. After confirmation, fetches and updates only the items that need a change, one by one.
 
 A valid barcode is exactly 12 digits. Freshly generated barcodes start with `71` and are handed out sequentially, continuing from the last used barcode stored in the gitignored `.last-barcode` file next to the script. If that file is missing, you are prompted for a seed. Duplicate barcodes (both within the run and reported by Alma) are detected and retried with the next generated barcode.
 
